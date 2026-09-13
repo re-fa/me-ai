@@ -2,67 +2,178 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تطبيق المحادثة المباشرة P2P</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>محادثة مباشرة P2P</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-    <div class="container">
-        <h2>⚡ تطبيق المحادثة المباشرة (End-to-End)</h2>
+<div id="app" class="app-shell">
 
-        <!-- واجهة الإعداد والاتصال -->
-        <div id="setupSection">
-            <div class="actions">
-                <button id="createRoomBtn" onclick="initRoom()">إنشاء غرفة جديدة</button>
+    <!-- رأس التطبيق -->
+    <header class="app-header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">محادثة P2P</span>
             </div>
-
-            <!-- قسم صانع الغرفة -->
-            <div id="hostBox" class="card hidden">
-                <p>1. انسخ هذا الرمز وأرسله لصديقك:</p>
-                <textarea id="offerTicket" readonly placeholder="جاري توليد الرمز عبر Google STUN..."></textarea>
-                <button onclick="copyToClipboard('offerTicket')">نسخ الرمز</button>
-
-                <div id="loadingSpinner" class="spinner-box hidden">
-                    <div class="spinner"></div>
-                    <p>في انتظار انضمام صديقك...</p>
-                </div>
-
-                <div id="answerInputBox" class="hidden">
-                    <p>2. أضع الرمز الذي أرسله لك صديقك هنا لإكمال الاتصال:</p>
-                    <textarea id="answerTicketInput" placeholder="الصق رمز الإجابة من صديقك هنا..."></textarea>
-                    <button class="btn-success" onclick="connectHost()">إكمال الاتصال وبدء المحادثة</button>
-                </div>
-            </div>
-
-            <hr>
-
-            <!-- قسم الانضمام لغرفة -->
-            <div id="joinBox" class="card">
-                <h3>الانضمام لغرفة قائمة</h3>
-                <p>الصق الرمز الذي وصلك من صديقك:</p>
-                <textarea id="remoteOfferInput" placeholder="الصق رمز الغرفة هنا..."></textarea>
-                <button onclick="joinRoom()">انضمام وتوليد رمز الإجابة</button>
-
-                <div id="answerOutputBox" class="hidden">
-                    <p>انسخ هذا الرمز وأرسله لصانع الغرفة ليكتمل الاتصال:</p>
-                    <textarea id="answerTicketOutput" readonly></textarea>
-                    <button onclick="copyToClipboard('answerTicketOutput')">نسخ رمز الإجابة</button>
-                </div>
+            <div id="connectionStatus" class="status-badge status-idle">
+                <span class="status-dot"></span>
+                <span id="statusText">جاهز</span>
             </div>
         </div>
+    </header>
 
-        <!-- واجهة المحادثة (تظهر تلقائياً عند نجاح الاتصال) -->
-        <div id="chatSection" class="card hidden">
-            <div class="chat-status">🟢 متصل مباشرة بالجهاز الآخر</div>
-            <div id="chatMessages" class="chat-box"></div>
-            <div class="chat-input">
-                <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." onkeypress="handleKeyPress(event)">
-                <button onclick="sendTextMessage()">إرسال</button>
+    <!-- المحتوى الرئيسي -->
+    <main class="app-main">
+
+        <!-- لوحة الإعداد -->
+        <section id="setupPanel" class="panel panel-setup">
+
+            <!-- اختيار الوضع -->
+            <div class="mode-tabs" role="tablist">
+                <button class="mode-tab active" data-mode="host" role="tab" aria-selected="true">
+                    <span class="tab-icon">🏠</span>
+                    <span>إنشاء غرفة</span>
+                </button>
+                <button class="mode-tab" data-mode="join" role="tab" aria-selected="false">
+                    <span class="tab-icon">🔗</span>
+                    <span>الانضمام</span>
+                </button>
             </div>
-        </div>
-    </div>
 
-    <script src="app.js"></script>
+            <!-- مسار المضيف -->
+            <div id="hostFlow" class="flow-container">
+
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-num">1</span>
+                        <span>إنشاء رمز الدعوة</span>
+                    </div>
+                    <div class="step-body">
+                        <p class="step-hint">انتظر حتى تجهز المعلومات، ثم انسخ الرمز وأرسله لصديقك</p>
+                        <div class="code-field">
+                            <textarea id="offerOutput" readonly placeholder="جاري التوليد..." rows="4"></textarea>
+                            <div class="field-actions">
+                                <button id="copyOfferBtn" class="btn btn-copy" disabled>
+                                    <span>📋</span> نسخ الرمز
+                                </button>
+                            </div>
+                        </div>
+                        <div id="hostLoading" class="loading-row">
+                            <div class="spinner spinner-sm"></div>
+                            <span>جاري جمع معلومات الشبكة...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="hostAnswerSection" class="step-card step-locked">
+                    <div class="step-header">
+                        <span class="step-num">2</span>
+                        <span>إكمال الاتصال</span>
+                    </div>
+                    <div class="step-body">
+                        <p class="step-hint">الصق رمز الإجابة الذي أرسله صديقك هنا</p>
+                        <textarea id="answerInput" placeholder="الصق رمز الإجابة..." rows="3"></textarea>
+                        <button id="completeConnectionBtn" class="btn btn-primary btn-full" disabled>
+                            <span>🔗</span> إكمال الاتصال
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- مسار المنضم -->
+            <div id="joinFlow" class="flow-container hidden">
+
+                <div class="step-card">
+                    <div class="step-header">
+                        <span class="step-num">1</span>
+                        <span>لصق رمز الدعوة</span>
+                    </div>
+                    <div class="step-body">
+                        <p class="step-hint">الصق رمز الغرفة الذي وصلك من صديقك</p>
+                        <textarea id="offerInput" placeholder="الصق رمز الدعوة هنا..." rows="4"></textarea>
+                        <button id="generateAnswerBtn" class="btn btn-primary btn-full">
+                            <span>⚙️</span> توليد رمز الإجابة
+                        </button>
+                    </div>
+                </div>
+
+                <div id="joinAnswerSection" class="step-card step-locked">
+                    <div class="step-header">
+                        <span class="step-num">2</span>
+                        <span>إرسال رمز الإجابة</span>
+                    </div>
+                    <div class="step-body">
+                        <p class="step-hint">انسخ هذا الرمز وأرسله لصاحب الغرفة</p>
+                        <div class="code-field">
+                            <textarea id="answerOutput" readonly placeholder="جاري التوليد..." rows="4"></textarea>
+                            <div class="field-actions">
+                                <button id="copyAnswerBtn" class="btn btn-copy" disabled>
+                                    <span>📋</span> نسخ الرمز
+                                </button>
+                            </div>
+                        </div>
+                        <div id="joinLoading" class="loading-row hidden">
+                            <div class="spinner spinner-sm"></div>
+                            <span>جاري تجهيز الاتصال...</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- شريط الخطأ -->
+            <div id="errorBanner" class="error-banner hidden">
+                <span class="error-icon">⚠️</span>
+                <span id="errorMessage"></span>
+                <button id="retryBtn" class="btn btn-sm btn-ghost">إعادة المحاولة</button>
+            </div>
+
+        </section>
+
+        <!-- لوحة المحادثة -->
+        <section id="chatPanel" class="panel panel-chat hidden">
+
+            <div class="chat-header">
+                <div class="peer-info">
+                    <div class="peer-avatar">👤</div>
+                    <div>
+                        <div class="peer-name">جهاز متصل</div>
+                        <div class="peer-status">
+                            <span class="status-dot status-online"></span>
+                            اتصال مباشر
+                        </div>
+                    </div>
+                </div>
+                <button id="disconnectBtn" class="btn btn-icon btn-ghost" title="قطع الاتصال">
+                    ✕
+                </button>
+            </div>
+
+            <div id="chatMessages" class="chat-messages" role="log" aria-live="polite"></div>
+
+            <div class="chat-composer">
+                <input type="text" id="messageInput" placeholder="اكتب رسالتك..." 
+                       autocomplete="off" maxlength="2000" disabled>
+                <button id="sendBtn" class="btn btn-send" disabled>
+                    <span>➤</span>
+                </button>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- إشعار عائم -->
+    <div id="toast" class="toast hidden"></div>
+
+</div>
+
+<script src="app.js"></script>
 </body>
 </html>
