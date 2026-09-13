@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تطبيق المحادثة المباشرة P2P</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div class="container">
+        <h2>⚡ تطبيق المحادثة المباشرة (End-to-End)</h2>
+
+        <!-- واجهة الإعداد والاتصال -->
+        <div id="setupSection">
+            <div class="actions">
+                <button id="createRoomBtn" onclick="initRoom()">إنشاء غرفة جديدة</button>
+            </div>
+
+            <!-- قسم صانع الغرفة -->
+            <div id="hostBox" class="card hidden">
+                <p>1. انسخ هذا الرمز وأرسله لصديقك:</p>
+                <textarea id="offerTicket" readonly placeholder="جاري توليد الرمز عبر Google STUN..."></textarea>
+                <button onclick="copyToClipboard('offerTicket')">نسخ الرمز</button>
+
+                <div id="loadingSpinner" class="spinner-box hidden">
+                    <div class="spinner"></div>
+                    <p>في انتظار انضمام صديقك...</p>
+                </div>
+
+                <div id="answerInputBox" class="hidden">
+                    <p>2. أضع الرمز الذي أرسله لك صديقك هنا لإكمال الاتصال:</p>
+                    <textarea id="answerTicketInput" placeholder="الصق رمز الإجابة من صديقك هنا..."></textarea>
+                    <button class="btn-success" onclick="connectHost()">إكمال الاتصال وبدء المحادثة</button>
+                </div>
+            </div>
+
+            <hr>
+
+            <!-- قسم الانضمام لغرفة -->
+            <div id="joinBox" class="card">
+                <h3>الانضمام لغرفة قائمة</h3>
+                <p>الصق الرمز الذي وصلك من صديقك:</p>
+                <textarea id="remoteOfferInput" placeholder="الصق رمز الغرفة هنا..."></textarea>
+                <button onclick="joinRoom()">انضمام وتوليد رمز الإجابة</button>
+
+                <div id="answerOutputBox" class="hidden">
+                    <p>انسخ هذا الرمز وأرسله لصانع الغرفة ليكتمل الاتصال:</p>
+                    <textarea id="answerTicketOutput" readonly></textarea>
+                    <button onclick="copyToClipboard('answerTicketOutput')">نسخ رمز الإجابة</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- واجهة المحادثة (تظهر تلقائياً عند نجاح الاتصال) -->
+        <div id="chatSection" class="card hidden">
+            <div class="chat-status">🟢 متصل مباشرة بالجهاز الآخر</div>
+            <div id="chatMessages" class="chat-box"></div>
+            <div class="chat-input">
+                <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." onkeypress="handleKeyPress(event)">
+                <button onclick="sendTextMessage()">إرسال</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
