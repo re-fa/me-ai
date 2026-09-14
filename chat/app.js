@@ -1,5 +1,5 @@
 // ============================================
-// محادثة P2P — WebRTC بدون خادم مع تبادل يدوي
+// محادثة P2P — WebRTC + QR + مكالمات صوتية/مرئية
 // ============================================
 
 // ---------- الإعدادات ----------
@@ -29,64 +29,81 @@ let pc = null;
 let dataChannel = null;
 let iceManager = null;
 let connectionTimer = null;
-let currentMode = 'host'; // 'host' | 'join'
+let currentMode = 'host';
 let isInitializing = false;
 
-// ---------- الوصول للعناصر ----------
+// وسائط
+let localStream = null;
+let remoteStream = null;
+let isVideoCallActive = false;
+let isAudioCallActive = false;
+
+// QR
+let qrScanInterval = null;
+let qrScanStream = null;
+
+// ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
 
 const dom = {
-    // الحالة
     statusBadge: $('connectionStatus'),
     statusText: $('statusText'),
-    // التبويبات
     modeTabs: document.querySelectorAll('.mode-tab'),
     hostFlow: $('hostFlow'),
     joinFlow: $('joinFlow'),
-    // المضيف
     offerOutput: $('offerOutput'),
     copyOfferBtn: $('copyOfferBtn'),
+    showQrOfferBtn: $('showQrOfferBtn'),
+    qrOfferBox: $('qrOfferBox'),
+    offerQrCanvas: $('offerQrCanvas'),
+    downloadQrOfferBtn: $('downloadQrOfferBtn'),
+    closeQrOfferBtn: $('closeQrOfferBtn'),
     hostLoading: $('hostLoading'),
     hostAnswerSection: $('hostAnswerSection'),
     answerInput: $('answerInput'),
     completeConnectionBtn: $('completeConnectionBtn'),
-    // المنضم
     offerInput: $('offerInput'),
     generateAnswerBtn: $('generateAnswerBtn'),
+    scanQrBtn: $('scanQrBtn'),
+    qrScanBox: $('qrScanBox'),
+    qrScanVideo: $('qrScanVideo'),
+    stopScanBtn: $('stopScanBtn'),
     joinAnswerSection: $('joinAnswerSection'),
     answerOutput: $('answerOutput'),
     copyAnswerBtn: $('copyAnswerBtn'),
-    joinLoading: $('joinLoading'),
-    // الخطأ
+    showQrAnswerBtn: $('showQrAnswerBtn'),
+    qrAnswerBox: $('qrAnswerBox'),
+    answerQrCanvas: $('answerQrCanvas'),
+    downloadQrAnswerBtn: $('downloadQrAnswerBtn'),
+    closeQrAnswerBtn: $('closeQrAnswerBtn'),
     errorBanner: $('errorBanner'),
     errorMessage: $('errorMessage'),
     retryBtn: $('retryBtn'),
-    // المحادثة
     setupPanel: $('setupPanel'),
     chatPanel: $('chatPanel'),
+    videoArea: $('videoArea'),
+    remoteVideo: $('remoteVideo'),
+    localVideo: $('localVideo'),
+    hangupVideoBtn: $('hangupVideoBtn'),
     chatMessages: $('chatMessages'),
     messageInput: $('messageInput'),
     sendBtn: $('sendBtn'),
+    toggleAudioBtn: $('toggleAudioBtn'),
+    toggleVideoBtn: $('toggleVideoBtn'),
     disconnectBtn: $('disconnectBtn'),
-    // الإشعار
     toast: $('toast')
 };
 
-// ---------- أدوات مساعدة ----------
+// ---------- أدوات ----------
 
-/** ترميز آمن Base64 مع دعم Unicode */
 function encodeTicket(obj) {
-    const json = JSON.stringify(obj);
-    return btoa(unescape(encodeURIComponent(json)));
+    return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
 }
 
-/** فك ترميز آمن Base64 مع دعم Unicode */
 function decodeTicket(str) {
-    const json = decodeURIComponent(escape(atob(str)));
-    return JSON.parse(json);
+    return JSON.parse(decodeURIComponent(escape(atob(str))));
 }
 
-/** إظهار إشعار عائم */
 let toastTimer = null;
 function showToast(message, duration = 2500) {
     clearTimeout(toastTimer);
@@ -99,7 +116,6 @@ function showToast(message, duration = 2500) {
     }, duration);
 }
 
-/** تحديث شارة الحالة */
 function setStatus(state, text) {
     dom.statusBadge.className = 'status-badge';
     if (state === 'connected') dom.statusBadge.classList.add('status-connected');
@@ -108,7 +124,6 @@ function setStatus(state, text) {
     dom.statusText.textContent = text;
 }
 
-/** عرض شريط الخطأ */
 function showError(message) {
     dom.errorMessage.textContent = message;
     dom.errorBanner.classList.remove('hidden');
@@ -119,39 +134,25 @@ function hideError() {
     dom.errorBanner.classList.add('hidden');
 }
 
-/** نسخ إلى الحافظة مع تغذية راجعة */
 async function copyFrom(element, btnElement) {
     const text = element.value;
     if (!text) return;
     const original = btnElement.innerHTML;
     try {
         await navigator.clipboard.writeText(text);
-        btnElement.innerHTML = '<span>✓</span> تم النسخ';
-        setTimeout(() => { btnElement.innerHTML = original; }, 1500);
-    } catch (e) {
-        // طريقة بديلة
+        btnElement.innerHTML = '✓ تم النسخ';
+    } catch {
         element.select();
-        element.setSelectionRange(0, 99999);
-        try {
-            document.execCommand('copy');
-            btnElement.innerHTML = '<span>✓</span> تم النسخ';
-            setTimeout(() => { btnElement.innerHTML = original; }, 1500);
-        } catch (err) {
-            showToast('فشل النسخ، انسخ يدوياً');
-        }
+        document.execCommand('copy');
+        btnElement.innerHTML = '✓ تم النسخ';
     }
+    setTimeout(() => { btnElement.innerHTML = original; }, 1500);
 }
 
-/** انتظار اكتمال جمع ICE مع مهلة زمنية */
 function waitForIceGathering(peerConnection, timeoutMs = ICE_GATHERING_TIMEOUT_MS) {
     return new Promise((resolve) => {
-        if (peerConnection.iceGatheringState === 'complete') {
-            resolve();
-            return;
-        }
-
+        if (peerConnection.iceGatheringState === 'complete') { resolve(); return; }
         let resolved = false;
-
         const finish = () => {
             if (resolved) return;
             resolved = true;
@@ -159,50 +160,31 @@ function waitForIceGathering(peerConnection, timeoutMs = ICE_GATHERING_TIMEOUT_M
             peerConnection.removeEventListener('icegatheringstatechange', checkState);
             resolve();
         };
-
         const checkState = () => {
-            if (peerConnection.iceGatheringState === 'complete') {
-                finish();
-            }
+            if (peerConnection.iceGatheringState === 'complete') finish();
         };
-
         const timeout = setTimeout(finish, timeoutMs);
-
         peerConnection.addEventListener('icegatheringstatechange', checkState);
     });
 }
 
-/** مدير مرشحي ICE مع تخزين مؤقت */
 function createIceManager(peerConnection) {
     const pending = [];
-
     return {
         async add(candidate) {
             if (!candidate) return;
-            if (!peerConnection.remoteDescription) {
-                pending.push(candidate);
-                return;
-            }
-            try {
-                await peerConnection.addIceCandidate(candidate);
-            } catch (e) {
-                console.warn('فشل إضافة مرشح ICE:', e);
-            }
+            if (!peerConnection.remoteDescription) { pending.push(candidate); return; }
+            try { await peerConnection.addIceCandidate(candidate); } catch (e) { console.warn(e); }
         },
         async flush() {
-            for (const candidate of pending) {
-                try {
-                    await peerConnection.addIceCandidate(candidate);
-                } catch (e) {
-                    console.warn('فشل تفريغ مرشح ICE:', e);
-                }
+            for (const c of pending) {
+                try { await peerConnection.addIceCandidate(c); } catch (e) { console.warn(e); }
             }
             pending.length = 0;
         }
     };
 }
 
-/** بدء مؤقت مهلة الاتصال */
 function startConnectionTimer() {
     clearConnectionTimer();
     connectionTimer = setTimeout(() => {
@@ -213,27 +195,194 @@ function startConnectionTimer() {
 }
 
 function clearConnectionTimer() {
-    if (connectionTimer) {
-        clearTimeout(connectionTimer);
-        connectionTimer = null;
-    }
+    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
 }
 
-/** تنظيف الاتصال وإعادة الحالة */
 function cleanupConnection() {
     clearConnectionTimer();
-    if (dataChannel) {
-        try { dataChannel.close(); } catch (e) {}
-        dataChannel = null;
-    }
-    if (pc) {
-        try { pc.close(); } catch (e) {}
-        pc = null;
-    }
+    stopQrScan();
+    if (dataChannel) { try { dataChannel.close(); } catch (e) {} dataChannel = null; }
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
     iceManager = null;
+    stopMedia();
 }
 
-// ---------- إعداد قناة البيانات ----------
+function stopMedia() {
+    if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+    }
+    remoteStream = null;
+    isVideoCallActive = false;
+    isAudioCallActive = false;
+    dom.videoArea.classList.add('hidden');
+    dom.toggleAudioBtn.textContent = '📞';
+    dom.toggleVideoBtn.textContent = '🎥';
+}
+
+// ---------- QR Code ----------
+
+function generateQrOnCanvas(canvas, text, size = 256) {
+    if (typeof QRCode === 'undefined') {
+        // fallback: استخدام مكتبة qr الخفيفة عبر CDN
+        showToast('مكتبة QR غير محملة');
+        return false;
+    }
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    QRCode.toCanvas(canvas, text, {
+        width: size,
+        margin: 2,
+        color: { dark: '#0a0f1a', light: '#ffffff' }
+    }, (err) => {
+        if (err) console.error(err);
+    });
+    return true;
+}
+
+function downloadQrCanvas(canvas, filename = 'qr-code.png') {
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+}
+
+async function startQrScan() {
+    try {
+        qrScanStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' }
+        });
+        dom.qrScanVideo.srcObject = qrScanStream;
+        await dom.qrScanVideo.play();
+        dom.qrScanBox.classList.remove('hidden');
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        qrScanInterval = setInterval(() => {
+            if (dom.qrScanVideo.readyState !== dom.qrScanVideo.HAVE_ENOUGH_DATA) return;
+            canvas.width = dom.qrScanVideo.videoWidth;
+            canvas.height = dom.qrScanVideo.videoHeight;
+            ctx.drawImage(dom.qrScanVideo, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            if (typeof jsQR === 'undefined') return;
+            const code = jsQR(imageData.data, canvas.width, canvas.height);
+            if (code) {
+                dom.offerInput.value = code.data;
+                stopQrScan();
+                showToast('✅ تم قراءة الرمز');
+            }
+        }, 300);
+    } catch (err) {
+        showToast('لا يمكن الوصول للكاميرا');
+    }
+}
+
+function stopQrScan() {
+    if (qrScanInterval) { clearInterval(qrScanInterval); qrScanInterval = null; }
+    if (qrScanStream) {
+        qrScanStream.getTracks().forEach(t => t.stop());
+        qrScanStream = null;
+    }
+    dom.qrScanBox.classList.add('hidden');
+    dom.qrScanVideo.srcObject = null;
+}
+
+// ---------- Media (Audio/Video) ----------
+
+async function getLocalMedia(withVideo = false) {
+    const constraints = {
+        audio: true,
+        video: withVideo ? { facingMode: 'user' } : false
+    };
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        return stream;
+    } catch (err) {
+        console.error('getUserMedia failed:', err);
+        showToast('لا يمكن الوصول للكاميرا/الميكروفون');
+        return null;
+    }
+}
+
+async function startCall(withVideo = false) {
+    if (!pc || pc.connectionState !== 'connected') {
+        showToast('يجب أن يكون الاتصال مكتملاً أولاً');
+        return;
+    }
+
+    localStream = await getLocalMedia(withVideo);
+    if (!localStream) return;
+
+    localStream.getTracks().forEach(track => {
+        pc.addTrack(track, localStream);
+    });
+
+    if (withVideo) {
+        dom.localVideo.srcObject = localStream;
+        dom.videoArea.classList.remove('hidden');
+        isVideoCallActive = true;
+        dom.toggleVideoBtn.textContent = '📵';
+    } else {
+        isAudioCallActive = true;
+        dom.toggleAudioBtn.textContent = '📵';
+    }
+
+    // إعادة التفاوض
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceGathering(pc);
+        const ticket = encodeTicket(pc.localDescription);
+        dataChannel.send(JSON.stringify({ type: 'renegotiate', sdp: ticket }));
+    } catch (err) {
+        console.error('Renegotiation failed:', err);
+    }
+}
+
+async function handleRenegotiation(sdpTicket) {
+    try {
+        const desc = decodeTicket(sdpTicket);
+        await pc.setRemoteDescription(new RTCSessionDescription(desc));
+        await iceManager.flush();
+
+        if (localStream) {
+            // نحن الطرف الذي يبدأ المكالمة، لا حاجة لعرض الفيديو البعيد هنا
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await waitForIceGathering(pc);
+        const ticket = encodeTicket(pc.localDescription);
+        dataChannel.send(JSON.stringify({ type: 'renegotiate-answer', sdp: ticket }));
+    } catch (err) {
+        console.error('Handle renegotiation failed:', err);
+    }
+}
+
+function handleRemoteTrack(event) {
+    remoteStream = event.streams[0];
+    if (remoteStream) {
+        dom.remoteVideo.srcObject = remoteStream;
+        dom.videoArea.classList.remove('hidden');
+        isVideoCallActive = true;
+        isAudioCallActive = true;
+    }
+}
+
+function hangupMedia() {
+    stopMedia();
+    if (pc) {
+        pc.getSenders().forEach(sender => {
+            if (sender.track) {
+                try { pc.removeTrack(sender); } catch (e) {}
+            }
+        });
+    }
+}
+
+// ---------- Data Channel ----------
 
 function setupDataChannel(channel) {
     dataChannel = channel;
@@ -251,6 +400,20 @@ function setupDataChannel(channel) {
     };
 
     channel.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'renegotiate') {
+                handleRenegotiation(msg.sdp);
+                return;
+            }
+            if (msg.type === 'renegotiate-answer') {
+                const desc = decodeTicket(msg.sdp);
+                pc.setRemoteDescription(new RTCSessionDescription(desc)).then(() => iceManager.flush());
+                return;
+            }
+        } catch (e) {
+            // رسالة نصية عادية
+        }
         appendMessage(event.data, 'received');
     };
 
@@ -263,47 +426,46 @@ function setupDataChannel(channel) {
         showToast('انقطع الاتصال');
     };
 
-    channel.onerror = (error) => {
-        console.error('خطأ في قناة البيانات:', error);
+    channel.onerror = (err) => {
+        console.error('DataChannel error:', err);
         showError('حدث خطأ في قناة البيانات');
     };
 }
 
-// ---------- إعداد اتصال النظير ----------
+// ---------- Peer Connection ----------
 
 function createPeerConnection() {
     const peer = new RTCPeerConnection(RTC_CONFIG);
     iceManager = createIceManager(peer);
 
-    peer.onicecandidate = () => {
-        // في التبادل اليدوي، المرشحون مضمنون في SDP
+    peer.onicecandidate = async (event) => {
+        if (event.candidate && iceManager) {
+            await iceManager.add(event.candidate);
+        }
     };
+
+    peer.ontrack = handleRemoteTrack;
 
     peer.onconnectionstatechange = () => {
         const state = peer.connectionState;
-        if (state === 'connected') {
-            setStatus('connected', 'متصل');
-            clearConnectionTimer();
-        } else if (state === 'connecting') {
-            setStatus('connecting', 'جاري الاتصال...');
-        } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-            if (state !== 'closed') {
-                setStatus('error', 'فشل الاتصال');
-            }
+        if (state === 'connected') { setStatus('connected', 'متصل'); clearConnectionTimer(); }
+        else if (state === 'connecting') { setStatus('connecting', 'جاري الاتصال...'); }
+        else if (state === 'failed' || state === 'disconnected') {
+            setStatus('error', 'فشل الاتصال');
             clearConnectionTimer();
         }
     };
 
     peer.oniceconnectionstatechange = () => {
         if (peer.iceConnectionState === 'failed') {
-            showError('فشل الاتصال عبر الشبكة. قد تحتاج شبكتك إلى خادم TURN.');
+            showError('فشل الاتصال عبر الشبكة. قد تحتاج شبكتك إلى TURN.');
         }
     };
 
     return peer;
 }
 
-// ---------- مسار المضيف ----------
+// ---------- Host Flow ----------
 
 async function initHostFlow() {
     if (isInitializing) return;
@@ -313,14 +475,14 @@ async function initHostFlow() {
     hideError();
     currentMode = 'host';
 
-    // إعادة تعيين الواجهة
     dom.offerOutput.value = '';
     dom.copyOfferBtn.disabled = true;
+    dom.showQrOfferBtn.disabled = true;
+    dom.qrOfferBox.classList.add('hidden');
     dom.hostLoading.classList.remove('hidden');
     dom.hostAnswerSection.classList.add('step-locked');
     dom.answerInput.value = '';
     dom.completeConnectionBtn.disabled = true;
-    dom.completeConnectionBtn.innerHTML = '<span>🔗</span> إكمال الاتصال';
 
     setStatus('connecting', 'جاري التجهيز...');
 
@@ -331,20 +493,20 @@ async function initHostFlow() {
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-
         await waitForIceGathering(pc);
 
         const ticket = encodeTicket(pc.localDescription);
         dom.offerOutput.value = ticket;
         dom.copyOfferBtn.disabled = false;
+        dom.showQrOfferBtn.disabled = false;
         dom.hostLoading.classList.add('hidden');
         dom.hostAnswerSection.classList.remove('step-locked');
         dom.completeConnectionBtn.disabled = false;
         setStatus('idle', 'بانتظار الرد');
         startConnectionTimer();
     } catch (err) {
-        console.error('فشل إنشاء الغرفة:', err);
-        showError('فشل إنشاء الغرفة. حاول مرة أخرى.');
+        console.error('Host init failed:', err);
+        showError('فشل إنشاء الغرفة.');
         dom.hostLoading.classList.add('hidden');
     } finally {
         isInitializing = false;
@@ -353,14 +515,8 @@ async function initHostFlow() {
 
 async function completeHostConnection() {
     const raw = dom.answerInput.value.trim();
-    if (!raw) {
-        showToast('الرجاء لصق رمز الإجابة أولاً');
-        return;
-    }
-    if (!pc) {
-        showError('لا يوجد اتصال نشط. أعد إنشاء الغرفة.');
-        return;
-    }
+    if (!raw) { showToast('الصق رمز الإجابة أولاً'); return; }
+    if (!pc) { showError('لا يوجد اتصال نشط.'); return; }
 
     dom.completeConnectionBtn.disabled = true;
     dom.completeConnectionBtn.innerHTML = '<div class="spinner spinner-sm"></div> جاري الاتصال...';
@@ -372,21 +528,17 @@ async function completeHostConnection() {
         setStatus('connecting', 'جاري الاتصال...');
         startConnectionTimer();
     } catch (err) {
-        console.error('فشل تطبيق الإجابة:', err);
-        showError('رمز الإجابة غير صحيح أو تالف.');
+        showError('رمز الإجابة غير صحيح.');
         dom.completeConnectionBtn.disabled = false;
-        dom.completeConnectionBtn.innerHTML = '<span>🔗</span> إكمال الاتصال';
+        dom.completeConnectionBtn.innerHTML = '🔗 إكمال الاتصال';
     }
 }
 
-// ---------- مسار المنضم ----------
+// ---------- Join Flow ----------
 
 async function generateJoinAnswer() {
     const raw = dom.offerInput.value.trim();
-    if (!raw) {
-        showToast('الرجاء لصق رمز الدعوة أولاً');
-        return;
-    }
+    if (!raw) { showToast('الصق رمز الدعوة أولاً'); return; }
 
     hideError();
     dom.generateAnswerBtn.disabled = true;
@@ -398,37 +550,34 @@ async function generateJoinAnswer() {
         currentMode = 'join';
 
         pc = createPeerConnection();
-
-        pc.ondatachannel = (event) => {
-            setupDataChannel(event.channel);
-        };
+        pc.ondatachannel = (event) => setupDataChannel(event.channel);
 
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         await iceManager.flush();
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
         await waitForIceGathering(pc);
 
         const ticket = encodeTicket(pc.localDescription);
         dom.answerOutput.value = ticket;
         dom.copyAnswerBtn.disabled = false;
+        dom.showQrAnswerBtn.disabled = false;
         dom.joinAnswerSection.classList.remove('step-locked');
         setStatus('connecting', 'جاري الاتصال...');
         startConnectionTimer();
 
         dom.generateAnswerBtn.disabled = false;
-        dom.generateAnswerBtn.innerHTML = '<span>⚙️</span> توليد رمز الإجابة';
+        dom.generateAnswerBtn.innerHTML = '⚙️ توليد الإجابة';
     } catch (err) {
-        console.error('فشل الانضمام:', err);
-        showError('رمز الدعوة غير صحيح أو تالف.');
+        console.error('Join failed:', err);
+        showError('رمز الدعوة غير صحيح.');
         dom.generateAnswerBtn.disabled = false;
-        dom.generateAnswerBtn.innerHTML = '<span>⚙️</span> توليد رمز الإجابة';
+        dom.generateAnswerBtn.innerHTML = '⚙️ توليد الإجابة';
     }
 }
 
-// ---------- المحادثة ----------
+// ---------- Chat ----------
 
 function appendMessage(text, type) {
     const row = document.createElement('div');
@@ -440,10 +589,7 @@ function appendMessage(text, type) {
 
     const time = document.createElement('span');
     time.className = 'msg-time';
-    time.textContent = new Date().toLocaleTimeString('ar-EG', {
-        hour: '2-digit',
-        minute: '2-digit'
-    });
+    time.textContent = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
     bubble.appendChild(time);
     row.appendChild(bubble);
@@ -461,22 +607,15 @@ function appendSystemMessage(text) {
     bubble.style.background = 'transparent';
     bubble.style.color = 'var(--text-muted)';
     bubble.style.fontSize = '12px';
-    bubble.style.textAlign = 'center';
-    bubble.style.maxWidth = '100%';
     bubble.textContent = text;
 
     row.appendChild(bubble);
     dom.chatMessages.appendChild(row);
-    dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
 }
 
 function sendMessage() {
     const text = dom.messageInput.value.trim();
-    if (!text) return;
-    if (!dataChannel || dataChannel.readyState !== 'open') {
-        showToast('القناة غير جاهزة');
-        return;
-    }
+    if (!text || !dataChannel || dataChannel.readyState !== 'open') return;
     dataChannel.send(text);
     appendMessage(text, 'sent');
     dom.messageInput.value = '';
@@ -492,32 +631,31 @@ function disconnect() {
     dom.messageInput.disabled = true;
     dom.sendBtn.disabled = true;
 
-    // إعادة تعيين واجهة المضيف
     dom.offerOutput.value = '';
     dom.copyOfferBtn.disabled = true;
+    dom.showQrOfferBtn.disabled = true;
     dom.hostLoading.classList.remove('hidden');
     dom.hostAnswerSection.classList.add('step-locked');
     dom.answerInput.value = '';
     dom.completeConnectionBtn.disabled = true;
-    dom.completeConnectionBtn.innerHTML = '<span>🔗</span> إكمال الاتصال';
+    dom.completeConnectionBtn.innerHTML = '🔗 إكمال الاتصال';
 
-    // إعادة تعيين واجهة المنضم
     dom.answerOutput.value = '';
     dom.copyAnswerBtn.disabled = true;
+    dom.showQrAnswerBtn.disabled = true;
     dom.joinAnswerSection.classList.add('step-locked');
     dom.generateAnswerBtn.disabled = false;
-    dom.generateAnswerBtn.innerHTML = '<span>⚙️</span> توليد رمز الإجابة';
+    dom.generateAnswerBtn.innerHTML = '⚙️ توليد الإجابة';
 
     showToast('تم قطع الاتصال');
 }
 
-// ---------- ربط الأحداث ----------
+// ---------- Events ----------
 
 function bindEvents() {
-    // تبديل الوضع
-    dom.modeTabs.forEach((tab) => {
+    dom.modeTabs.forEach(tab => {
         tab.addEventListener('click', () => {
-            dom.modeTabs.forEach((t) => t.classList.remove('active'));
+            dom.modeTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
 
             if (tab.dataset.mode === 'host') {
@@ -534,40 +672,92 @@ function bindEvents() {
         });
     });
 
-    // أزرار المضيف
     dom.copyOfferBtn.addEventListener('click', () => copyFrom(dom.offerOutput, dom.copyOfferBtn));
     dom.completeConnectionBtn.addEventListener('click', completeHostConnection);
 
-    // أزرار المنضم
-    dom.generateAnswerBtn.addEventListener('click', generateJoinAnswer);
-    dom.copyAnswerBtn.addEventListener('click', () => copyFrom(dom.answerOutput, dom.copyAnswerBtn));
-
-    // المحادثة
-    dom.sendBtn.addEventListener('click', sendMessage);
-    dom.messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
+    dom.showQrOfferBtn.addEventListener('click', () => {
+        const text = dom.offerOutput.value;
+        if (!text) return;
+        if (typeof QRCode !== 'undefined') {
+            QRCode.toCanvas(dom.offerQrCanvas, text, { width: 256, margin: 2 }, (err) => {
+                if (!err) dom.qrOfferBox.classList.remove('hidden');
+            });
+        } else {
+            showToast('مكتبة QR غير محملة');
         }
     });
+    dom.downloadQrOfferBtn.addEventListener('click', () => downloadQrCanvas(dom.offerQrCanvas, 'invite-qr.png'));
+    dom.closeQrOfferBtn.addEventListener('click', () => dom.qrOfferBox.classList.add('hidden'));
+
+    dom.generateAnswerBtn.addEventListener('click', generateJoinAnswer);
+    dom.scanQrBtn.addEventListener('click', startQrScan);
+    dom.stopScanBtn.addEventListener('click', stopQrScan);
+    dom.copyAnswerBtn.addEventListener('click', () => copyFrom(dom.answerOutput, dom.copyAnswerBtn));
+
+    dom.showQrAnswerBtn.addEventListener('click', () => {
+        const text = dom.answerOutput.value;
+        if (!text) return;
+        if (typeof QRCode !== 'undefined') {
+            QRCode.toCanvas(dom.answerQrCanvas, text, { width: 256, margin: 2 }, (err) => {
+                if (!err) dom.qrAnswerBox.classList.remove('hidden');
+            });
+        }
+    });
+    dom.downloadQrAnswerBtn.addEventListener('click', () => downloadQrCanvas(dom.answerQrCanvas, 'answer-qr.png'));
+    dom.closeQrAnswerBtn.addEventListener('click', () => dom.qrAnswerBox.classList.add('hidden'));
+
+    dom.sendBtn.addEventListener('click', sendMessage);
+    dom.messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+
+    dom.toggleAudioBtn.addEventListener('click', () => {
+        if (isAudioCallActive || isVideoCallActive) {
+            hangupMedia();
+        } else {
+            startCall(false);
+        }
+    });
+
+    dom.toggleVideoBtn.addEventListener('click', () => {
+        if (isVideoCallActive) {
+            hangupMedia();
+        } else {
+            startCall(true);
+        }
+    });
+
+    dom.hangupVideoBtn.addEventListener('click', hangupMedia);
+
     dom.disconnectBtn.addEventListener('click', disconnect);
 
-    // زر إعادة المحاولة
     dom.retryBtn.addEventListener('click', () => {
         hideError();
         if (currentMode === 'host') initHostFlow();
         else generateJoinAnswer();
     });
 
-    // تنظيف عند إغلاق الصفحة
     window.addEventListener('beforeunload', () => {
         cleanupConnection();
     });
 }
 
-// ---------- نقطة الانطلاق ----------
+// ---------- Init ----------
 
 document.addEventListener('DOMContentLoaded', () => {
     bindEvents();
-    initHostFlow();
+
+    // تحميل مكتبة QR للإنتاج
+    if (typeof QRCode === 'undefined') {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js';
+        script.onload = () => { initHostFlow(); };
+        document.head.appendChild(script);
+    } else {
+        initHostFlow();
+    }
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./service-worker.js');
+    }
 });
